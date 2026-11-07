@@ -68,6 +68,19 @@
   #tAct { right:24px; bottom:200px; }
   #tRun { right:110px; bottom:150px; background:rgba(122,211,168,.9); }
 
+  #vignette { position:fixed; inset:0; pointer-events:none; z-index:9; opacity:0;
+    background:radial-gradient(ellipse at center, rgba(255,80,140,0) 50%, rgba(255,50,110,.6) 100%); }
+  .pop { position:fixed; z-index:12; pointer-events:none; font-weight:700; font-size:58px; color:#ff4f8f; white-space:nowrap;
+    -webkit-text-stroke:3px #fff; paint-order:stroke fill; text-shadow:0 5px 0 #ffd36e, 0 10px 22px rgba(120,40,120,.35);
+    transform:translate(-50%,-50%); animation:pop .9s ease-out forwards; }
+  .pop.poof { color:#9b7bff; }
+  @keyframes pop {
+    0% { transform:translate(-50%,-50%) scale(.2) rotate(-12deg); opacity:1; }
+    18% { transform:translate(-50%,-65%) scale(1.35) rotate(-6deg); }
+    35% { transform:translate(-50%,-65%) scale(1) rotate(-4deg); }
+    75% { opacity:1; }
+    100% { transform:translate(-50%,-110%) scale(1) rotate(-4deg); opacity:0; }
+  }
   @media (max-width:700px) {
     h1 { font-size:44px; } .roles { grid-template-columns:1fr; } .role .em { font-size:32px; }
     #mini { width:110px; height:110px; top:60px; bottom:auto; right:10px; } #hint { display:none; }
@@ -78,6 +91,7 @@
 </head>
 <body>
 <canvas id="game"></canvas>
+<div id="vignette"></div>
 
 <div id="hud" class="hidden">
   <div id="top"></div>
@@ -107,7 +121,8 @@
     </div>
     <div class="controls">
       <kbd>WASD</kbd>/<kbd>Arrows</kbd> move · <kbd>Shift</kbd> sprint (survivor)<br>
-      <kbd>Space</kbd> dash (survivor) · stomp-jump (Bonk) — watch the red landing ring!
+      <kbd>Space</kbd> dash (survivor) · stomp-jump (Bonk) — watch the red landing ring!<br>
+      🌿 Hide in bushes · 🍄 run into mushrooms to bounce · <kbd>M</kbd> sound on/off
     </div>
   </div>
 </div>
@@ -135,6 +150,7 @@ const CFG = {
   killerSpeed: 6.1, jumpV: 12.5, lunge: 10.5, killerCD: 1.7, landLag: 0.4,
   squishR: 1.65, beacons: 5, need: 3, beaconWork: 28, beaconR: 2.8,
   reviveTime: 3.2, reviveR: 2.0, bleedTime: 30, gateR: 2.8, pancakeSafe: 6,
+  bounceV: 15, bounceSpeed: 9.5, bushR: 1.4,
 };
 const AIRTIME = 2 * CFG.jumpV / GRAV;
 
@@ -189,12 +205,23 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 function mesh(geo, mat, shadow = true) { const m = new THREE.Mesh(geo, mat); m.castShadow = shadow; m.receiveShadow = true; return m; }
 
 // ============================================================ audio
-let actx = null;
+let actx = null, master = null, musicGain = null, muted = false;
 function initAudio() {
-  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { } }
+  if (!actx) {
+    try {
+      actx = new (window.AudioContext || window.webkitAudioContext)();
+      master = actx.createGain(); master.gain.value = muted ? 0 : 1; master.connect(actx.destination);
+      musicGain = actx.createGain(); musicGain.gain.value = 0; musicGain.connect(master);
+    } catch (e) { actx = null; }
+  }
   if (actx && actx.state === 'suspended') actx.resume();
 }
-function tone(f0, f1, dur, type = 'sine', vol = 0.1, delay = 0) {
+function toggleMute() {
+  muted = !muted;
+  if (master) master.gain.value = muted ? 0 : 1;
+  toast(muted ? 'Sound off 🔇' : 'Sound on 🔊', 1.2);
+}
+function tone(f0, f1, dur, type = 'sine', vol = 0.1, delay = 0, dest = master) {
   if (!actx || vol < 0.005) return;
   const t = actx.currentTime + delay;
   const o = actx.createOscillator(), g = actx.createGain();
@@ -203,7 +230,7 @@ function tone(f0, f1, dur, type = 'sine', vol = 0.1, delay = 0) {
   o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
   g.gain.setValueAtTime(vol, t);
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.connect(g).connect(actx.destination);
+  o.connect(g).connect(dest);
   o.start(t); o.stop(t + dur + 0.05);
 }
 function near(p) { const c = state.camTarget; if (!c || !p) return 1; return Math.max(0.12, 1 - dist(c.pos, p) / 40); }
@@ -217,19 +244,69 @@ const sfx = {
   gate: () => [523, 659, 784, 988, 1175].forEach((f, i) => tone(f, f, 0.35, 'triangle', 0.08, i * 0.1)),
   escape: v => tone(600, 1500, 0.4, 'sine', 0.08 * v),
   ghost: v => tone(520, 140, 0.9, 'sine', 0.07 * v),
+  boing: v => { tone(180, 720, 0.25, 'sine', 0.12 * v); tone(360, 1100, 0.18, 'triangle', 0.04 * v, 0.02); },
+  rustle: v => { tone(1400, 500, 0.08, 'triangle', 0.03 * v); tone(1100, 400, 0.08, 'triangle', 0.025 * v, 0.06); },
+  splat: v => tone(300, 60, 0.25, 'square', 0.06 * v),
+  heartbeat: v => { tone(120, 50, 0.14, 'triangle', 0.4 * v); tone(100, 45, 0.14, 'triangle', 0.3 * v, 0.17); },
 };
+
+// chase music: a bouncy 16-step loop that fades in while a chase is on
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+const BASS = [48, 0, 48, 0, 55, 0, 55, 0, 57, 0, 57, 0, 53, 0, 55, 0];
+const LEAD = [72, 0, 76, 79, 0, 76, 72, 0, 74, 0, 77, 81, 0, 79, 74, 0];
+const audioState = { next: 0, step: 0, chase: false, quietT: 9, beatT: 0, vig: 0 };
+function scheduleMusic() {
+  const a = audioState, now = actx.currentTime, stepDur = 60 / 152 / 2;
+  if (a.quietT > 2) { a.next = 0; return; }
+  if (a.next < now) a.next = now + 0.05;
+  while (a.next < now + 0.15) {
+    const i = a.step % 16, d = a.next - now;
+    if (BASS[i]) tone(mtof(BASS[i]), mtof(BASS[i]), stepDur * 1.6, 'square', 0.3, d, musicGain);
+    if (LEAD[i]) tone(mtof(LEAD[i]), mtof(LEAD[i]) * 1.01, stepDur * 0.9, 'triangle', 0.45, d, musicGain);
+    if (i % 2 === 0) tone(2400, 1800, 0.03, 'square', 0.05, d, musicGain);
+    a.step++; a.next += stepDur;
+  }
+}
+function updateAudio(dt) {
+  const a = audioState, K = state.killer, v = state.camTarget;
+  let danger = 0, chase = false;
+  if (state.running && v && K) {
+    if (state.role === 'survivor') {
+      if (v.kind === 'survivor' && (v.state === 'alive' || v.state === 'down')) {
+        const d = dist(v.pos, K.pos);
+        danger = Math.max(0, 1 - d / 22);
+        chase = !v.hidden && d < 12 && (K.ai.target === v || d < 6);
+      }
+    } else {
+      for (const s of state.survivors) if (s.state === 'alive' && !s.hidden && dist(s.pos, K.pos) < 12) chase = true;
+    }
+  }
+  // heartbeat: faster and louder the closer Bonk gets (survivors only)
+  if (danger > 0) {
+    a.beatT -= dt;
+    if (a.beatT <= 0) { a.beatT = 1.15 - 0.75 * danger; if (actx) sfx.heartbeat(0.35 + 0.65 * danger); a.vig = 0.3 + 0.7 * danger; }
+  } else a.beatT = 0;
+  a.vig = Math.max(0, a.vig - dt * 1.5);
+  vignette.style.opacity = (a.vig * danger).toFixed(3);
+  if (!actx) return;
+  a.chase = chase;
+  a.quietT = chase ? 0 : a.quietT + dt;
+  musicGain.gain.setTargetAtTime(chase ? 0.13 : 0, actx.currentTime, chase ? 0.15 : 0.6);
+  scheduleMusic();
+}
 
 // ============================================================ state
 const state = {
   running: false, over: false, role: null, time: 0,
   ents: [], survivors: [], killer: null, player: null, camTarget: null,
-  beacons: [], gate: null, obstacles: [], lit: 0, gateOpen: false, shake: 0, endT: 0,
+  beacons: [], gate: null, obstacles: [], bushes: [], bouncers: [], lit: 0, gateOpen: false, shake: 0, endT: 0,
+  freeze: 0, slow: 0, zoom: 0,
 };
 
 // ============================================================ map building
 function buildMap(seed) {
   world.clear();
-  state.obstacles = []; state.beacons = [];
+  state.obstacles = []; state.beacons = []; state.bushes = []; state.bouncers = [];
   const rng = mulberry32(seed);
 
   const water = mesh(new THREE.CircleGeometry(220, 48), toon(0x86d8f2), false);
@@ -275,6 +352,7 @@ function buildMap(seed) {
     for (const b of state.beacons) if (Math.hypot(x - b.x, z - b.z) < CFG.beaconR + r + 2) return false;
     if (Math.hypot(x - state.gate.x, z - state.gate.z) < 7) return false;
     for (const o of state.obstacles) if (Math.hypot(x - o.x, z - o.z) < o.r + r + 2.4) return false;
+    for (const o of state.bushes) if (Math.hypot(x - o.x, z - o.z) < o.r + r + 2.4) return false;
     return true;
   };
   const place = (count, maker) => {
@@ -286,13 +364,19 @@ function buildMap(seed) {
       if (!okSpot(x, z, o.r)) continue;
       o.mesh.position.set(x, 0, z); o.mesh.rotation.y = rng() * 6.28;
       world.add(o.mesh);
-      state.obstacles.push({ x, z, r: o.r, h: o.h });
+      if (o.kind === 'bush') state.bushes.push({ x, z, r: o.r, mesh: o.mesh, mat: o.mat, rustle: 0 });
+      else {
+        const ob = { x, z, r: o.r, h: o.h };
+        if (o.kind === 'bouncer') { ob.bouncer = { x, z, cap: o.cap, squash: 0, flat: 0, ob }; state.bouncers.push(ob.bouncer); }
+        state.obstacles.push(ob);
+      }
       n++;
     }
   };
-  place(24, makeTree);
-  place(14, makeRock);
-  place(10, makeMushroom);
+  place(22, makeTree);
+  place(12, makeRock);
+  place(12, makeBush);
+  place(8, makeMushroom);
 }
 
 function makeTree(rng) {
@@ -314,18 +398,35 @@ function makeRock(rng) {
   const g = new THREE.Group(); g.add(m);
   return { mesh: g, r: s * 0.9, h: 1.1 };
 }
+// bouncy mushroom: survivors who run into it get launched; Bonk flattens it by landing on it
 function makeMushroom(rng) {
   const g = new THREE.Group();
-  const stem = mesh(new THREE.CylinderGeometry(0.3, 0.4, 1.2, 10), toon(0xfff6e6));
+  const stem = mesh(new THREE.CylinderGeometry(0.32, 0.42, 1.2, 10), toon(0xfff6e6));
   stem.position.y = 0.6; g.add(stem);
+  const capG = new THREE.Group(); capG.position.y = 1.1; g.add(capG);
   const capCol = rng() < .5 ? 0xff7a8a : 0xb68cff;
-  const cap = mesh(new THREE.SphereGeometry(1, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2), toon(capCol));
-  cap.scale.set(1.0, 0.7, 1.0); cap.position.y = 1.1; g.add(cap);
-  for (let i = 0; i < 5; i++) {
-    const a = i / 5 * 6.28, d = mesh(SPH_LO, toon(0xffffff), false);
-    d.scale.set(0.15, 0.06, 0.15); d.position.set(Math.cos(a) * 0.55, 1.62, Math.sin(a) * 0.55); g.add(d);
+  const cap = mesh(new THREE.SphereGeometry(1.15, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2), toon(capCol));
+  cap.scale.y = 0.65; capG.add(cap);
+  const dotMat = toon(0xffffff);
+  for (let i = 0; i < 6; i++) {
+    const a = i / 6 * 6.28, d = mesh(SPH_LO, dotMat, false);
+    d.scale.set(0.17, 0.07, 0.17); d.position.set(Math.cos(a) * 0.68, 0.58, Math.sin(a) * 0.68); capG.add(d);
   }
-  return { mesh: g, r: 0.75, h: 1.7 };
+  const top = mesh(SPH_LO, dotMat, false); top.scale.set(0.2, 0.07, 0.2); top.position.y = 0.74; capG.add(top);
+  return { mesh: g, r: 1.0, h: 1.7, kind: 'bouncer', cap: capG };
+}
+// hiding bush: walk-through; survivors inside are hidden from Bonk unless he is right next to them
+function makeBush(rng) {
+  const g = new THREE.Group();
+  const mat = toon(rng() < .5 ? 0x4fb86a : 0x5cc47a, { transparent: true, opacity: 1 });
+  [[0, 0.8, 0, 1.15], [0.8, 0.65, 0.3, 0.85], [-0.75, 0.7, -0.25, 0.9], [0.2, 0.7, -0.8, 0.8], [-0.2, 0.65, 0.8, 0.8], [0, 1.4, 0.05, 0.8]]
+    .forEach(([x, y, z, sc]) => { const p = mesh(SPH, mat); p.position.set(x, y, z); p.scale.setScalar(sc); g.add(p); });
+  const berry = toon(0xff6f9a);
+  for (let i = 0; i < 6; i++) {
+    const a = i / 6 * 6.28 + rng(), b = mesh(SPH_LO, berry, false);
+    b.scale.setScalar(0.09); b.position.set(Math.cos(a) * 1.05, 0.9 + rng() * 0.6, Math.sin(a) * 1.05); g.add(b);
+  }
+  return { mesh: g, r: CFG.bushR, h: 0, kind: 'bush', mat };
 }
 
 const GREY = new THREE.Color(0xbfb6d9), GOLD = new THREE.Color(0xffd84a);
@@ -439,7 +540,7 @@ function makeEnt(kind, def, rng) {
     pos: new THREE.Vector3(), vx: 0, vz: 0, y: 0, vy: 0, airborne: false, facing: 0, r: killer ? 0.95 : 0.55,
     state: 'alive', stamina: CFG.staminaMax, exhausted: false, dashCD: 0, dashT: 0,
     jumpCD: 2, jumpT: 0, jumpId: 0, landLag: 0, landSquash: 0,
-    bleed: 0, revive: 0, protect: 0, phase: rng() * 6, ghostT: 0, charging: false, sprinting: false,
+    bleed: 0, revive: 0, protect: 0, phase: rng() * 6, ghostT: 0, charging: false, sprinting: false, hidden: false,
     landing: new THREE.Vector3(),
     ai: {
       fear: 8 + rng() * 4, react: 0.08 + rng() * 0.2, dashSkill: 0.4 + rng() * 0.4, side: rng() < .5 ? 1 : -1,
@@ -447,6 +548,7 @@ function makeEnt(kind, def, rng) {
       goal: null, goalT: 0, fleeing: false, lastJump: -1, dodgeDash: false,
       stuckT: 0, lx: 0, lz: 0, wanted: false, unstick: 0, ux: 0, uz: 0,
       target: null, retarget: 0, hesitate: 1, wander: null, wanderT: 0, leadSkill: 0.6, aimErr: 2.0,
+      lastSeen: null, escape: null, escapeTried: false, hiding: false, calmT: 0, sneaky: rng() < 0.65,
     },
   };
 }
@@ -505,6 +607,7 @@ const pressed = { space: false };
 addEventListener('keydown', e => {
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if (e.code === 'Space' && !e.repeat) pressed.space = true;
+  if (e.code === 'KeyM' && !e.repeat) toggleMute();
   keys.add(e.code);
 });
 addEventListener('keyup', e => keys.delete(e.code));
@@ -554,9 +657,10 @@ function accel(e, wx, wz, speed, dt, sharp = 14) {
 function integrate(e, dt) {
   e.pos.x += e.vx * dt; e.pos.z += e.vz * dt;
   for (const o of state.obstacles) {
-    if (e.y > o.h) continue;
+    if (e.y > o.h || (o.bouncer && e.airborne && e.kind === 'survivor')) continue;
     const dx = e.pos.x - o.x, dz = e.pos.z - o.z, min = o.r + e.r, d2 = dx * dx + dz * dz;
     if (d2 < min * min) {
+      if (o.bouncer && e.kind === 'survivor' && e.state === 'alive' && o.bouncer.flat <= 0) { bounce(e, o.bouncer); continue; }
       const d = Math.sqrt(d2) || 0.001, nx = dx / d, nz = dz / d;
       e.pos.x = o.x + nx * min; e.pos.z = o.z + nz * min;
       const vn = e.vx * nx + e.vz * nz; if (vn < 0) { e.vx -= vn * nx; e.vz -= vn * nz; }
@@ -569,6 +673,16 @@ function integrate(e, dt) {
     const vn = e.vx * nx + e.vz * nz; if (vn > 0) { e.vx -= vn * nx; e.vz -= vn * nz; }
   }
 }
+function bounce(e, b) {
+  let dx = e.vx, dz = e.vz, sp = Math.hypot(dx, dz);
+  if (sp < 1.5) { dx = b.x - e.pos.x; dz = b.z - e.pos.z; sp = Math.hypot(dx, dz) || 1; }
+  e.vx = dx / sp * CFG.bounceSpeed; e.vz = dz / sp * CFG.bounceSpeed;
+  e.vy = CFG.bounceV; e.y = 0.01; e.airborne = true; e.dashT = 0;
+  e.ai.escape = null;
+  b.squash = 0.4;
+  sfx.boing(near(e.pos));
+  burst(b.x, 1.9, b.z, [0xffffff, 0xffe066], 8, 3, 0.15, 0.5, 0.6, STAR_GEO);
+}
 function face(e, dt) {
   if (Math.hypot(e.vx, e.vz) < 0.4) return;
   let d = Math.atan2(e.vx, e.vz) - e.facing; d = Math.atan2(Math.sin(d), Math.cos(d));
@@ -580,7 +694,7 @@ function steer(e, o) {
   const ox = o.x, oz = o.z, tx = -oz, tz = ox;
   let x = ox, z = oz;
   for (const ob of state.obstacles) {
-    if (e.y > ob.h) continue;
+    if (e.y > ob.h || (ob.bouncer && e.kind === 'survivor')) continue;
     const dx = e.pos.x - ob.x, dz = e.pos.z - ob.z, d = Math.hypot(dx, dz), range = ob.r + e.r + 1.8;
     if (d > range || d < 1e-4) continue;
     const ahead = -(dx * ox + dz * oz) / d;
@@ -628,11 +742,28 @@ function survivorBrain(e, dt) {
       out.sprint = true; out.dash = ai.dodgeDash; ai.wanted = true; return out;
     }
   }
+  // hiding in a bush: stay still until Bonk is right on top of us or long gone
+  if (ai.hiding) {
+    if (!e.hidden || dK < 2.8) { ai.hiding = false; ai.escape = null; }
+    else {
+      ai.calmT = dK > 15 ? ai.calmT + dt : 0;
+      if (ai.calmT > 2.5) { ai.hiding = false; ai.escape = null; ai.fleeing = false; }
+      else return out;
+    }
+  }
   // flee
   const busy = state.beacons.some(b => !b.done && dist(e.pos, b) < CFG.beaconR);
   const fearR = (ai.fleeing ? ai.fear + ai.fleeExtra : ai.fear) * (busy ? ai.focus : 1);
   if (dK < fearR) {
     ai.fleeing = true;
+    if (!ai.escape && !ai.escapeTried) { ai.escape = pickEscape(e, K); ai.escapeTried = true; }
+    const f = ai.escape;
+    if (f && (f.kind === 'bush' || f.ref.flat <= 0) && dist(K.pos, f.ref) > dist(e.pos, f.ref) - 1) {
+      if (f.kind === 'bush' && e.hidden && dist(e.pos, f.ref) < 0.8) { ai.hiding = true; ai.calmT = 0; return out; }
+      setDir(out, f.ref.x - e.pos.x, f.ref.z - e.pos.z); steer(e, out);
+      out.sprint = true; ai.wanted = true; return out;
+    }
+    ai.escape = null;
     let fx = (e.pos.x - K.pos.x) / (dK || 1), fz = (e.pos.z - K.pos.z) / (dK || 1);
     const tx = -fz * ai.side * 0.45, tz = fx * ai.side * 0.45; fx += tx; fz += tz;
     const r = Math.hypot(e.pos.x, e.pos.z);
@@ -641,7 +772,7 @@ function survivorBrain(e, dt) {
     out.sprint = true; ai.wanted = true;
     return out;
   }
-  ai.fleeing = false;
+  ai.fleeing = false; ai.escapeTried = false; ai.escape = null;
 
   ai.goalT -= dt;
   if (ai.goalT <= 0 || !goalValid(ai.goal)) { ai.goalT = 1.2; ai.goal = pickGoal(e); }
@@ -649,10 +780,33 @@ function survivorBrain(e, dt) {
   const gp = goalPos(g), dg = Math.hypot(gp.x - e.pos.x, gp.z - e.pos.z);
   const stopR = g.type === 'beacon' ? 1.6 : g.type === 'down' ? 0.9 : 0;
   if (dg > stopR) {
-    setDir(out, gp.x - e.pos.x, gp.z - e.pos.z); steer(e, out); ai.wanted = true;
+    let gx = (gp.x - e.pos.x) / (dg || 1), gz = (gp.z - e.pos.z) / (dg || 1);
+    // curve around Bonk instead of walking straight past him
+    const wr = ai.fear + 5;
+    if (dK < wr) {
+      const w = (wr - dK) / 5 * 1.5, kx = (e.pos.x - K.pos.x) / (dK || 1), kz = (e.pos.z - K.pos.z) / (dK || 1);
+      gx += kx * w - kz * ai.side * w; gz += kz * w + kx * ai.side * w;
+    }
+    setDir(out, gx, gz); steer(e, out); ai.wanted = true;
     out.sprint = (g.type === 'gate' && dK < 16) || (g.type === 'down' && dg > 8 && e.stamina > 2);
   }
   return out;
+}
+// a nearby bush (to hide) or mushroom (to bounce away) that isn't toward Bonk
+function pickEscape(e, K) {
+  const ax = e.pos.x - K.pos.x, az = e.pos.z - K.pos.z, al = Math.hypot(ax, az) || 1;
+  let best = null, bd = 1e9;
+  const consider = (ref, kind) => {
+    const fx = ref.x - e.pos.x, fz = ref.z - e.pos.z, d = Math.hypot(fx, fz);
+    if (d > 9 || d < 0.5) return;
+    if ((fx * ax + fz * az) / (d * al) < 0.1) return;
+    if (dist(K.pos, ref) < d + 2) return;
+    const sc = d + (kind === 'bush' ? 0 : 1);
+    if (sc < bd) { bd = sc; best = { kind, ref }; }
+  };
+  if (e.ai.sneaky) for (const b of state.bushes) consider(b, 'bush');
+  for (const b of state.bouncers) if (b.flat <= 0) consider(b, 'bounce');
+  return best;
 }
 function goalValid(g) {
   if (!g) return false;
@@ -696,6 +850,7 @@ function killerBrain(K, dt) {
     for (const s of state.survivors) {
       if (!valid(s)) continue;
       const d = dist(K.pos, s.pos);
+      if (s.hidden && d > 3) continue;
       const sees = d < 20 || s.charging || (s.sprinting && d < 30) || (s === ai.target && d < 26);
       if (!sees) continue;
       let sc = d; if (s.state === 'down') sc += 40; if (s.protect > 0) sc += 30;
@@ -706,10 +861,11 @@ function killerBrain(K, dt) {
   const t = ai.target;
   if (t) {
     const d = dist(K.pos, t.pos);
+    ai.lastSeen = { x: t.pos.x, z: t.pos.z, t: state.time };
     const lead = Math.min(d / CFG.killerSpeed, 0.5);
     setDir(out, t.pos.x + t.vx * lead - K.pos.x, t.pos.z + t.vz * lead - K.pos.z); steer(K, out);
     ai.wanted = true;
-    if (d < 5.8 && K.jumpCD <= 0 && ai.hesitate <= 0 && t.protect <= 0) {
+    if (d < 5.8 && K.jumpCD <= 0 && ai.hesitate <= 0 && t.protect <= 0 && !t.airborne) {
       const lk = t.state === 'down' ? 0 : ai.leadSkill, err = t.state === 'down' ? 0.3 : ai.aimErr;
       const ax = t.pos.x + t.vx * AIRTIME * lk + (Math.random() - .5) * err;
       const az = t.pos.z + t.vz * AIRTIME * lk + (Math.random() - .5) * err;
@@ -718,6 +874,17 @@ function killerBrain(K, dt) {
       out.jump = true; out.jx = jx; out.jz = jz;
       ai.hesitate = 0.3 + Math.random() * 0.6;
     }
+  } else if (ai.lastSeen && state.time - ai.lastSeen.t < 7) {
+    // lost sight: go to where they vanished and stomp the nearest bush
+    const ls = ai.lastSeen;
+    let bush = null, bd = 3;
+    for (const b of state.bushes) { const bdist = Math.hypot(b.x - ls.x, b.z - ls.z); if (bdist < bd) { bd = bdist; bush = b; } }
+    const gx = bush ? bush.x : ls.x, gz = bush ? bush.z : ls.z, d = Math.hypot(gx - K.pos.x, gz - K.pos.z);
+    setDir(out, gx - K.pos.x, gz - K.pos.z); steer(K, out); ai.wanted = true;
+    if (bush && d < 6 && d > 0.8 && K.jumpCD <= 0 && ai.hesitate <= 0) {
+      out.jump = true; out.jx = (gx - K.pos.x) / AIRTIME; out.jz = (gz - K.pos.z) / AIRTIME;
+      ai.hesitate = 0.5; ai.lastSeen = null;
+    } else if (d < 1.5) ai.lastSeen = null;
   } else {
     ai.wanderT -= dt;
     if (!ai.wander || ai.wanderT <= 0 || dist(K.pos, ai.wander) < 3) {
@@ -736,11 +903,20 @@ function killerBrain(K, dt) {
 function updateSurvivor(e, dt) {
   if (e.state === 'ghost') { e.ghostT += dt; return; }
   if (e.state === 'escaped') return;
-  e.protect -= dt; e.dashCD -= dt;
+  e.protect -= dt; e.dashCD -= dt; e.landSquash -= dt;
   if (e.state === 'down') {
     if (e.revive <= 0.001) e.bleed -= dt;
     if (e.bleed <= 0) makeGhost(e);
     accel(e, 0, 0, 0, dt, 8); integrate(e, dt);
+    return;
+  }
+  if (e.airborne) {
+    e.vy -= GRAV * dt; e.y += e.vy * dt;
+    integrate(e, dt); face(e, dt);
+    if (e.y <= 0) {
+      e.y = 0; e.vy = 0; e.airborne = false; e.landSquash = 0.18; e.vx *= 0.5; e.vz *= 0.5;
+      burst(e.pos.x, 0.2, e.pos.z, 0xffffff, 6, 2.5, 0.15, 0.35, 0.3);
+    }
     return;
   }
   let wx, wz, sprint, dash;
@@ -791,7 +967,7 @@ function updateKiller(K, dt) {
     K.vy -= GRAV * dt; K.y += K.vy * dt;
     if (K.vy < 0 && K.y < 1.5) {
       for (const s of state.survivors) {
-        if ((s.state === 'alive' || s.state === 'down') && s.protect <= 0 && dist(K.pos, s.pos) < CFG.squishR) squish(s);
+        if ((s.state === 'alive' || s.state === 'down') && s.protect <= 0 && dist(K.pos, s.pos) < CFG.squishR && Math.abs(K.y - s.y) < 1.4) squish(s);
       }
     }
     if (K.y <= 0) {
@@ -799,6 +975,12 @@ function updateKiller(K, dt) {
       K.landSquash = 0.25; K.landLag = CFG.landLag;
       sfx.land(near(K.pos));
       wave(K.pos.x, K.pos.z, 0xffffff, 3.2);
+      for (const b of state.bouncers) {
+        if (b.flat <= 0 && Math.hypot(K.pos.x - b.x, K.pos.z - b.z) < 1.0 + K.r + 0.4) {
+          b.flat = 7; b.ob.h = 0.6; sfx.splat(near(K.pos));
+          burst(b.x, 1, b.z, [0xff7a8a, 0xffffff], 10, 4, 0.18, 0.6, 0.6);
+        }
+      }
       burst(K.pos.x, 0.2, K.pos.z, [0xe9f7d9, 0xffffff], 12, 5, 0.25, 0.5, 0.5);
       const c = state.camTarget; if (c) state.shake = Math.max(state.shake, 0.35 * Math.max(0, 1 - dist(c.pos, K.pos) / 18));
     }
@@ -811,6 +993,8 @@ function updateKiller(K, dt) {
 }
 
 function squish(s) {
+  const wasAlive = s.state === 'alive';
+  s.airborne = false; s.y = 0;
   if (s.state === 'alive') {
     s.state = 'down'; s.bleed = CFG.bleedTime; s.revive = 0; s.vx = s.vz = 0; s.protect = CFG.pancakeSafe;
     toast(s.isPlayer ? 'You got squished! 🥞' : `${s.name} got squished! 🥞`);
@@ -821,6 +1005,24 @@ function squish(s) {
   burst(s.pos.x, 0.4, s.pos.z, [s.color, 0xffffff, 0xffe066], 22, 7, 0.22, 0.8, 0.8, STAR_GEO);
   wave(s.pos.x, s.pos.z, s.color, 4);
   if (state.camTarget === s) state.shake = 0.6;
+  const c = state.camTarget;
+  if (state.killer.isPlayer || s.isPlayer || (c && dist(c.pos, s.pos) < 16)) {
+    state.freeze = 0.13; state.slow = 0.3;
+    if (!reduceMotion) state.zoom = 1;
+    popText(s.pos, wasAlive ? 'SQUISH!' : 'POOF!', !wasAlive);
+  }
+}
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+function popText(p, text, poof) {
+  const v = new THREE.Vector3(p.x, 1.2, p.z).project(camera);
+  if (v.z > 1 || Math.abs(v.x) > 1.1 || Math.abs(v.y) > 1.1) return;
+  const el = document.createElement('div');
+  el.className = 'pop' + (poof ? ' poof' : '');
+  el.textContent = text;
+  el.style.left = ((v.x + 1) / 2 * innerWidth) + 'px';
+  el.style.top = ((1 - v.y) / 2 * innerHeight) + 'px';
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 950);
 }
 function makeGhost(e) {
   e.state = 'ghost'; e.ghostT = 0;
@@ -831,6 +1033,39 @@ function makeGhost(e) {
   toast(e.isPlayer ? "You're a ghost now 👻 — spectating" : `${e.name} became a ghost 👻`);
 }
 
+function updateBushes(dt) {
+  for (const s of state.survivors) {
+    const was = s.hidden;
+    let inBush = null;
+    if ((s.state === 'alive' || s.state === 'down') && !s.airborne)
+      for (const b of state.bushes) if (Math.hypot(s.pos.x - b.x, s.pos.z - b.z) < b.r) { inBush = b; break; }
+    s.hidden = !!inBush;
+    if (inBush && !was) {
+      inBush.rustle = 0.4; sfx.rustle(near(s.pos));
+      burst(inBush.x, 1.2, inBush.z, [0x5cc47a, 0x8fe08a], 6, 2.5, 0.12, 0.5, 0.6);
+    }
+    if (inBush && Math.hypot(s.vx, s.vz) > 1) inBush.rustle = Math.max(inBush.rustle, 0.15);
+  }
+  const c = state.camTarget;
+  for (const b of state.bushes) {
+    b.rustle = Math.max(0, b.rustle - dt);
+    const w = b.rustle > 0 ? Math.sin(state.time * 45) * 0.07 * Math.min(1, b.rustle / 0.15) : 0;
+    b.mesh.scale.set(1 + w, 1 - w, 1 + w);
+    const see = c && c.kind === 'survivor' && Math.hypot(c.pos.x - b.x, c.pos.z - b.z) < b.r + 0.6;
+    b.mat.opacity += ((see ? 0.35 : 1) - b.mat.opacity) * Math.min(1, dt * 10);
+  }
+}
+function updateBouncers(dt) {
+  for (const b of state.bouncers) {
+    if (b.flat > 0) { b.flat -= dt; if (b.flat <= 0) { b.ob.h = 1.7; b.squash = 0.4; } }
+    b.squash = Math.max(0, b.squash - dt);
+    let sy;
+    if (b.flat > 0) sy = 0.3;
+    else { const k = b.squash / 0.4; sy = 1 - 0.45 * Math.sin((1 - k) * Math.PI * 3) * k; }
+    const cur = b.cap.scale.y + (sy - b.cap.scale.y) * Math.min(1, dt * (b.flat > 0 ? 20 : 40));
+    b.cap.scale.set(1 + (1 - cur) * 0.5, cur, 1 + (1 - cur) * 0.5);
+  }
+}
 function updateBeacons(dt) {
   for (const b of state.beacons) {
     b.crystal.rotation.y += dt * (b.done ? 2.5 : 0.6);
@@ -838,7 +1073,7 @@ function updateBeacons(dt) {
     if (b.done) { b.beam.material.opacity = 0.25 + Math.sin(state.time * 3) * 0.06; continue; }
     if (state.gateOpen) continue;
     let n = 0;
-    for (const s of state.survivors) if (s.state === 'alive' && dist(s.pos, b) < CFG.beaconR) { n++; s.charging = true; }
+    for (const s of state.survivors) if (s.state === 'alive' && !s.airborne && dist(s.pos, b) < CFG.beaconR) { n++; s.charging = true; }
     if (n) {
       b.progress = Math.min(1, b.progress + dt * n / CFG.beaconWork);
       if (Math.random() < dt * 6) burst(b.x, 2.8, b.z, 0xffe066, 1, 1.5, 0.1, 0.6, 0.6, STAR_GEO);
@@ -898,7 +1133,7 @@ function checkEscape() {
   }
 }
 function separate() {
-  const list = state.ents.filter(e => e.state === 'alive' && !(e.kind === 'killer' && e.airborne));
+  const list = state.ents.filter(e => e.state === 'alive' && !e.airborne);
   for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
     const a = list[i], b = list[j];
     const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z, d = Math.hypot(dx, dz), min = a.r + b.r;
@@ -960,10 +1195,14 @@ function updateCamera(dt) {
     const t = performance.now() * 0.00006;
     camera.position.set(Math.cos(t) * 48, 30, Math.sin(t) * 48);
     camera.lookAt(0, 0, 0);
+    if (camera.fov !== 50) { camera.fov = 50; camera.updateProjectionMatrix(); }
     sun.position.set(15, 35, 10); sun.target.position.set(0, 0, 0);
     return;
   }
   const c = state.camTarget; if (!c) return;
+  state.zoom = Math.max(0, state.zoom - dt * 1.6);
+  const fov = 50 - 13 * Math.sin(Math.min(1, state.zoom) * Math.PI / 2);
+  if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
   const kill = state.role === 'killer';
   const tx = c.pos.x, tz = c.pos.z;
   const k = 1 - Math.exp(-6 * dt);
@@ -982,6 +1221,7 @@ function updateCamera(dt) {
 
 // ============================================================ HUD
 const $ = id => document.getElementById(id);
+const vignette = $('vignette');
 const hud = $('hud'), topEl = $('top'), squadEl = $('squad'), toastEl = $('toast'), statusEl = $('status'), barsEl = $('bars'), hintEl = $('hint');
 const mini = $('mini'), mctx = mini.getContext('2d');
 let toastTimer = 0;
@@ -1005,8 +1245,8 @@ function setupHUD() {
   barsEl.innerHTML = bars.map(([l, c]) => `<div class="bar">${l}<div class="track"><div class="fill" style="background:${c}"></div></div></div>`).join('');
   barFills = [...barsEl.querySelectorAll('.fill')];
   hintEl.innerHTML = state.role === 'killer'
-    ? 'Land on survivors to squish 🥞<br>Stomp pancakes to finish them 👻'
-    : 'Stand in a lamp ring to light it ✨<br>Stand by a pancake to fluff it up 💖';
+    ? 'Land on survivors to squish 🥞<br>Stomp bushes to flush out hiders 🌿<br>Land on mushrooms to flatten them 🍄'
+    : 'Stand in a lamp ring to light it ✨<br>Stand by a pancake to fluff it up 💖<br>Hide in bushes 🌿 · bounce off mushrooms 🍄';
 }
 const STATE_ICON = { alive: '🙂', down: '🥞', ghost: '👻', escaped: '🏃' };
 function updateHUD() {
@@ -1035,6 +1275,8 @@ function updateHUD() {
       const b = state.beacons.find(b => !b.done && dist(p.pos, b) < CFG.beaconR);
       if (d) msg = `Fluffing up ${d.name}… ${Math.round(100 * d.revive / CFG.reviveTime)}%`;
       else if (b) msg = `Lighting lamp… ${Math.round(100 * b.progress)}%`;
+      else if (p.airborne) msg = 'Boing! 🍄';
+      else if (p.hidden) msg = '🌿 Hidden in a bush';
     }
     statusEl.textContent = msg;
   }
@@ -1046,6 +1288,9 @@ function drawMini() {
   c.fillStyle = '#c4ecaf'; c.beginPath(); c.arc(0, 0, ARENA_R * s, 0, 6.29); c.fill();
   c.fillStyle = 'rgba(70,140,80,.35)';
   for (const o of state.obstacles) { c.beginPath(); c.arc(o.x * s, o.z * s, Math.max(3, o.r * s), 0, 6.29); c.fill(); }
+  c.fillStyle = 'rgba(60,150,80,.55)';
+  for (const b of state.bushes) { c.beginPath(); c.arc(b.x * s, b.z * s, b.r * s, 0, 6.29); c.fill(); }
+  for (const b of state.bouncers) { c.fillStyle = b.flat > 0 ? '#e6c3cb' : '#ff7a8a'; c.beginPath(); c.arc(b.x * s, b.z * s, 5, 0, 6.29); c.fill(); }
   for (const b of state.beacons) {
     c.fillStyle = b.done ? '#ffcf4a' : '#d8d0ec'; c.beginPath(); c.arc(b.x * s, b.z * s, 10, 0, 6.29); c.fill();
     if (!b.done && b.progress > 0) { c.strokeStyle = '#ffb800'; c.lineWidth = 5; c.beginPath(); c.arc(b.x * s, b.z * s, 13, -Math.PI / 2, -Math.PI / 2 + b.progress * 6.283); c.stroke(); }
@@ -1055,6 +1300,7 @@ function drawMini() {
   const killerView = state.role === 'killer';
   for (const e of state.survivors) {
     if (e.state === 'ghost' || e.state === 'escaped') continue;
+    if (killerView && e.hidden && dist(e.pos, P.pos) > 3) continue;
     if (killerView && !(e.charging || e.state === 'down' || dist(e.pos, P.pos) < 22)) continue;
     c.fillStyle = hex(e.color); c.strokeStyle = e.isPlayer ? '#fff' : 'rgba(0,0,0,.35)'; c.lineWidth = e.isPlayer ? 5 : 2;
     c.beginPath();
@@ -1074,7 +1320,7 @@ function startGame(role) {
   initAudio();
   const seed = (Math.random() * 1e9) | 0, rng = mulberry32(seed ^ 0x5bd1e995);
   buildMap(seed);
-  Object.assign(state, { running: true, over: false, role, time: 0, lit: 0, gateOpen: false, shake: 0, endT: 0 });
+  Object.assign(state, { running: true, over: false, role, time: 0, lit: 0, gateOpen: false, shake: 0, endT: 0, freeze: 0, slow: 0, zoom: 0 });
   state.survivors = SURV_DEFS.map(d => makeEnt('survivor', d, rng));
   state.killer = makeEnt('killer', KILLER_DEF, rng);
   state.ents = [...state.survivors, state.killer];
@@ -1139,10 +1385,15 @@ function update(dt) {
   updateBeacons(dt);
   for (const s of state.survivors) updateSurvivor(s, dt);
   updateKiller(state.killer, dt);
+  updateBouncers(dt);
+  updateBushes(dt);
   separate();
   updateRevive(dt);
   checkEscape();
   for (const e of state.ents) animate(e, dt);
+  if (state.role === 'killer') {
+    for (const s of state.survivors) if (s.hidden && dist(s.pos, state.killer.pos) > 3) s.model.root.visible = false;
+  }
   pressed.space = false;
 
   const K = state.killer;
@@ -1193,9 +1444,15 @@ let last = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
-  if (state.running) update(dt);
-  else if (state.over) { state.time += dt; for (const e of state.ents) animate(e, dt); }
-  updateParticles(dt);
+  let sim = dt;
+  if (state.running) {
+    // squish freeze-frame, then a short slow-motion
+    if (state.freeze > 0) { state.freeze -= dt; sim = 0; }
+    else if (state.slow > 0) { state.slow -= dt; sim = dt * 0.35; }
+    update(sim);
+  } else if (state.over) { state.time += dt; for (const e of state.ents) animate(e, dt); }
+  updateAudio(dt);
+  updateParticles(sim);
   updateCamera(dt);
   renderer.render(scene, camera);
 }

@@ -164,11 +164,14 @@ const KILLER_DEF = { name: 'Bonk', color: 0x8a6bff };
 
 // ============================================================ renderer / scene
 const canvas = document.getElementById('game');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// phones and tablets get lighter graphics settings so they don't overheat
+const MOBILE = matchMedia('(pointer: coarse)').matches || Math.min(screen.width, screen.height) < 820;
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: !MOBILE });
+renderer.setPixelRatio(Math.min(devicePixelRatio, MOBILE ? 1.5 : 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = MOBILE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
+if (MOBILE) renderer.shadowMap.autoUpdate = false; // shadows redrawn every other frame instead
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xbfe9ff);
@@ -178,7 +181,7 @@ const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 30
 scene.add(new THREE.HemisphereLight(0xffffff, 0xa6d48f, 1.8));
 const sun = new THREE.DirectionalLight(0xfff6e8, 2.3);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.setScalar(MOBILE ? 1024 : 2048);
 Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 30, bottom: -30, near: 1, far: 90 });
 sun.shadow.bias = -0.0005;
 scene.add(sun, sun.target);
@@ -197,6 +200,32 @@ const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradient
 
 const SPH = new THREE.SphereGeometry(1, 24, 18);
 const SPH_LO = new THREE.SphereGeometry(1, 10, 8);
+const CIRCLE_GEO = new THREE.CircleGeometry(1, 20);
+const SPH_DECO = new THREE.SphereGeometry(1, 14, 10); // lighter spheres for scenery
+const TRUNK_GEO = new THREE.CylinderGeometry(0.35, 0.5, 1.8, 8);
+const ROCK_GEO = new THREE.DodecahedronGeometry(1, 0);
+const markStatic = o => o.traverse(m => { if (m.isMesh) m.userData.static = true; });
+// merge every non-moving decoration that shares a shape into one instanced draw call
+function batchStatic() {
+  world.updateMatrixWorld(true);
+  const groups = new Map();
+  world.traverse(m => {
+    if (!m.isMesh || !m.userData.static) return;
+    const k = m.geometry.uuid + (m.castShadow ? 's' : 'n');
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(m);
+  });
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const im = new THREE.InstancedMesh(list[0].geometry, toon(0xffffff), list.length);
+    list.forEach((m, i) => { im.setMatrixAt(i, m.matrixWorld); im.setColorAt(i, m.material.color); });
+    list.forEach(m => { m.removeFromParent(); m.material.dispose(); });
+    im.castShadow = list[0].castShadow; im.receiveShadow = true;
+    im.instanceMatrix.needsUpdate = true; im.instanceColor.needsUpdate = true;
+    im.computeBoundingSphere();
+    world.add(im);
+  }
+}
 const world = new THREE.Group();
 scene.add(world);
 
@@ -318,22 +347,23 @@ function buildMap(seed) {
 
   for (let i = 0; i < 34; i++) {
     const a = rng() * Math.PI * 2, r = Math.sqrt(rng()) * (ARENA_R - 2);
-    const p = mesh(new THREE.CircleGeometry(1 + rng() * 2.5, 20), toon(rng() < .5 ? 0xb4ea9c : 0x8fd57e), false);
-    p.rotation.x = -Math.PI / 2; p.position.set(Math.cos(a) * r, 0.01 + i * 0.0002, Math.sin(a) * r); world.add(p);
+    const p = mesh(CIRCLE_GEO, toon(rng() < .5 ? 0xb4ea9c : 0x8fd57e), false);
+    p.scale.setScalar(1 + rng() * 2.5);
+    p.rotation.x = -Math.PI / 2; p.position.set(Math.cos(a) * r, 0.01 + i * 0.0002, Math.sin(a) * r); markStatic(p); world.add(p);
   }
   const flowerCols = [0xffffff, 0xffb3d1, 0xffe27a, 0xc9b6ff];
   for (let i = 0; i < 90; i++) {
     const a = rng() * Math.PI * 2, r = Math.sqrt(rng()) * (ARENA_R - 1);
     const f = mesh(SPH_LO, toon(flowerCols[i % 4]), false);
-    f.scale.set(0.16, 0.1, 0.16); f.position.set(Math.cos(a) * r, 0.12, Math.sin(a) * r); world.add(f);
+    f.scale.set(0.16, 0.1, 0.16); f.position.set(Math.cos(a) * r, 0.12, Math.sin(a) * r); markStatic(f); world.add(f);
   }
   // bushy fence ring
   const ringN = Math.floor((Math.PI * 2 * (ARENA_R + 1.3)) / 2.6);
   for (let i = 0; i < ringN; i++) {
     const a = i / ringN * Math.PI * 2;
-    const b = mesh(SPH, toon(i % 3 ? 0x6cc77a : 0x7ed492));
+    const b = mesh(SPH_DECO, toon(i % 3 ? 0x6cc77a : 0x7ed492));
     const s = 1.0 + rng() * 0.4;
-    b.scale.set(s, s * 0.85, s); b.position.set(Math.cos(a) * (ARENA_R + 1.4), 0.5, Math.sin(a) * (ARENA_R + 1.4)); world.add(b);
+    b.scale.set(s, s * 0.85, s); b.position.set(Math.cos(a) * (ARENA_R + 1.4), 0.5, Math.sin(a) * (ARENA_R + 1.4)); markStatic(b); world.add(b);
   }
 
   // beacons
@@ -367,6 +397,7 @@ function buildMap(seed) {
       if (o.kind === 'bush') state.bushes.push({ x, z, r: o.r, mesh: o.mesh, mat: o.mat, rustle: 0 });
       else {
         const ob = { x, z, r: o.r, h: o.h };
+        if (!o.kind) markStatic(o.mesh); // trees and rocks never move
         if (o.kind === 'bouncer') { ob.bouncer = { x, z, cap: o.cap, squash: 0, flat: 0, ob }; state.bouncers.push(ob.bouncer); }
         state.obstacles.push(ob);
       }
@@ -377,23 +408,24 @@ function buildMap(seed) {
   place(12, makeRock);
   place(12, makeBush);
   place(8, makeMushroom);
+  batchStatic();
 }
 
 function makeTree(rng) {
   const g = new THREE.Group();
-  const trunk = mesh(new THREE.CylinderGeometry(0.35, 0.5, 1.8, 8), toon(0xb98560));
+  const trunk = mesh(TRUNK_GEO, toon(0xb98560));
   trunk.position.y = 0.9; g.add(trunk);
   const cols = [0x7ed492, 0x9be07a, 0xffb8d6, 0x8fd6a0, 0xffd1e4];
   const c = cols[Math.floor(rng() * cols.length)];
   const mat = toon(c);
   [[0, 2.7, 0, 1.45], [0.7, 3.3, 0.2, 1.05], [-0.6, 3.4, -0.3, 1.0], [0.1, 4.0, 0, 0.85]].forEach(([x, y, z, s]) => {
-    const p = mesh(SPH, mat); p.position.set(x, y, z); p.scale.setScalar(s); g.add(p);
+    const p = mesh(SPH_DECO, mat); p.position.set(x, y, z); p.scale.setScalar(s); g.add(p);
   });
   return { mesh: g, r: 0.75, h: 9 };
 }
 function makeRock(rng) {
   const s = 0.9 + rng() * 0.6;
-  const m = mesh(new THREE.DodecahedronGeometry(1, 0), toon(rng() < .5 ? 0xcfc8e6 : 0xbfd2e0));
+  const m = mesh(ROCK_GEO, toon(rng() < .5 ? 0xcfc8e6 : 0xbfd2e0));
   m.scale.set(s, s * 0.7, s * 0.9); m.position.y = s * 0.3;
   const g = new THREE.Group(); g.add(m);
   return { mesh: g, r: s * 0.9, h: 1.1 };
@@ -1424,8 +1456,6 @@ function update(dt) {
       state.camTarget = state.survivors.find(s => s.state === 'alive') || state.survivors.find(s => s.state === 'down') || state.killer;
     }
   }
-  updateHUD();
-  drawMini();
   if (!state.survivors.some(s => s.state === 'alive' || s.state === 'down')) endGame();
 }
 
@@ -1442,9 +1472,12 @@ buildMap(12345);
 const autoRole = new URLSearchParams(location.search).get('role');
 if (autoRole === 'killer' || autoRole === 'survivor') startGame(autoRole);
 
-let last = performance.now();
+let last = performance.now(), hudT = 0, frameNo = 0;
 function frame(now) {
   requestAnimationFrame(frame);
+  // 120 Hz phone screens would otherwise draw twice as often as needed; the menu only needs 30 fps
+  const minGap = !state.running ? 1 / 30 : MOBILE ? 1 / 60 : 0;
+  if ((now - last) / 1000 < minGap - 0.002) return;
   const dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
   let sim = dt;
   if (state.running) {
@@ -1456,6 +1489,9 @@ function frame(now) {
   updateAudio(dt);
   updateParticles(sim);
   updateCamera(dt);
+  hudT += dt;
+  if (state.running && hudT > 0.066) { hudT = 0; updateHUD(); drawMini(); }
+  if (MOBILE && frameNo++ % 2 === 0) renderer.shadowMap.needsUpdate = true;
   renderer.render(scene, camera);
 }
 requestAnimationFrame(frame);

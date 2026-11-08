@@ -51,8 +51,8 @@
   .bar { width:170px; background:var(--panel); border-radius:14px; padding:6px 10px; font-size:13px; font-weight:600; }
   .track { height:10px; background:#ece6f5; border-radius:6px; overflow:hidden; margin-top:4px; }
   .fill { height:100%; width:100%; border-radius:6px; background:#7ad3a8; }
-  #mini { position:absolute; right:14px; bottom:14px; width:170px; height:170px; border-radius:50%;
-    background:rgba(255,255,255,.55); border:4px solid #fff; }
+  #cross { position:absolute; left:50%; top:50%; width:8px; height:8px; margin:-4px; border-radius:50%;
+    background:#fff; box-shadow:0 0 0 2px rgba(80,40,120,.45); display:none; }
   #toast { position:absolute; top:66px; left:50%; transform:translateX(-50%); font-size:26px; font-weight:700; color:#fff;
     text-shadow:0 3px 0 #b066d6, 0 0 12px rgba(120,60,160,.5); opacity:0; transition:opacity .3s; text-align:center;
     width:min(90vw,700px); }
@@ -60,6 +60,7 @@
 
   #touch { position:fixed; inset:0; z-index:11; display:none; }
   #joy { position:absolute; left:0; top:0; width:50%; height:100%; }
+  #look { position:absolute; right:0; top:0; width:50%; height:100%; }
   #knob { position:absolute; width:110px; height:110px; margin:-55px; border-radius:50%; background:rgba(255,255,255,.3);
     border:3px solid rgba(255,255,255,.7); display:none; }
   #knob i { position:absolute; left:50%; top:50%; width:44px; height:44px; margin:-22px; border-radius:50%; background:rgba(255,255,255,.85); }
@@ -83,7 +84,7 @@
   }
   @media (max-width:700px) {
     h1 { font-size:44px; } .roles { grid-template-columns:1fr; } .role .em { font-size:32px; }
-    #mini { width:110px; height:110px; top:60px; bottom:auto; right:10px; } #hint { display:none; }
+    #hint { display:none; }
     .bar { width:120px; } #toast { font-size:18px; } #top { font-size:15px; top:10px; }
     .pp span.nm { display:none; } #status { font-size:14px; }
   }
@@ -99,11 +100,11 @@
   <div id="toast"></div>
   <div id="status"></div>
   <div id="bars"></div>
-  <canvas id="mini" width="340" height="340"></canvas>
+  <div id="cross"></div>
   <div id="hint"></div>
 </div>
 
-<div id="touch"><div id="joy"></div><div id="knob"><i></i></div><div class="tbtn" id="tAct">GO!</div><div class="tbtn" id="tRun">RUN</div></div>
+<div id="touch"><div id="joy"></div><div id="look"></div><div id="knob"><i></i></div><div class="tbtn" id="tAct">GO!</div><div class="tbtn" id="tRun">RUN</div></div>
 
 <div id="menu" class="overlay">
   <div class="card">
@@ -120,7 +121,8 @@
       </button>
     </div>
     <div class="controls">
-      <kbd>WASD</kbd>/<kbd>Arrows</kbd> move · <kbd>Shift</kbd> sprint (survivor)<br>
+      <kbd>WASD</kbd> move · <kbd>Mouse</kbd> or <kbd>←</kbd><kbd>→</kbd> look around · <kbd>Shift</kbd> sprint (survivor)<br>
+      Bonk sees through his own eyes; survivors are seen from behind<br>
       <kbd>Space</kbd> dash (survivor) · stomp-jump (Bonk) — watch the red landing ring!<br>
       🌿 Hide in bushes · 🍄 run into mushrooms to bounce · <kbd>M</kbd> sound on/off
     </div>
@@ -468,16 +470,22 @@ function makeBeacon(x, z) {
   const pole = mesh(new THREE.CylinderGeometry(0.17, 0.17, 1.7, 10), toon(0xffffff)); pole.position.y = 1.35; g.add(pole);
   const crystalMat = toon(0xbfb6d9, { emissive: 0x000000 });
   const crystal = mesh(new THREE.OctahedronGeometry(0.6, 0), crystalMat); crystal.scale.y = 1.4; crystal.position.y = 2.75; g.add(crystal);
-  const ringBg = new THREE.Mesh(new THREE.RingGeometry(CFG.beaconR - 0.25, CFG.beaconR, 48),
+  // faint circle on the ground marks where to stand
+  const zone = new THREE.Mesh(new THREE.RingGeometry(CFG.beaconR - 0.12, CFG.beaconR, 48),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3, depthWrite: false }));
+  zone.rotation.x = -Math.PI / 2; zone.position.y = 0.03; g.add(zone);
+  // floating progress hoop at head height: a thin track that fills with gold
+  const halo = new THREE.Group(); halo.position.y = 1.5; g.add(halo);
+  const ringBg = new THREE.Mesh(new THREE.TorusGeometry(CFG.beaconR - 0.15, 0.06, 6, 64),
     new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false }));
-  ringBg.rotation.x = -Math.PI / 2; ringBg.position.y = 0.03; g.add(ringBg);
-  const ringFill = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0xffc93c, side: THREE.DoubleSide, depthWrite: false }));
-  ringFill.rotation.x = -Math.PI / 2; ringFill.position.y = 0.04; g.add(ringFill);
+  ringBg.rotation.x = -Math.PI / 2; halo.add(ringBg);
+  const ringFill = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0xffc93c }));
+  ringFill.rotation.x = -Math.PI / 2; halo.add(ringFill);
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 40, 16, 1, true),
     new THREE.MeshBasicMaterial({ color: 0xfff3a0, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
   beam.position.y = 20; g.add(beam);
   state.obstacles.push({ x, z, r: 1.15, h: 3.5 });
-  return { x, z, progress: 0, done: false, crystal, ringFill, beam, drawn: -1 };
+  return { x, z, progress: 0, done: false, crystal, halo, ringFill, beam, drawn: -1 };
 }
 
 function makeGate(angle) {
@@ -669,16 +677,64 @@ const tRun = document.getElementById('tRun');
 tRun.addEventListener('touchstart', e => { e.preventDefault(); touch.sprint = true; }, { passive: false });
 tRun.addEventListener('touchend', () => touch.sprint = false);
 
+// ---- looking around: yaw = which way the camera faces, pitch = up/down
+const look = { yaw: 0, pitch: 0 };
+const PITCH = { killer: [-1.25, 0.6, -0.12], survivor: [0.08, 1.1, 0.38] }; // [min, max, start]
+function clampPitch() {
+  const [lo, hi] = PITCH[state.role] || PITCH.survivor;
+  look.pitch = Math.max(lo, Math.min(hi, look.pitch));
+}
+function turn(dx, dy, sens) {
+  look.yaw -= dx * sens;
+  look.pitch += (state.role === 'killer' ? -dy : dy) * sens;
+  clampPitch();
+}
+canvas.addEventListener('click', () => {
+  if (!state.running || isTouch || document.pointerLockElement === canvas) return;
+  try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (e) { }
+});
+addEventListener('mousemove', e => {
+  if (!state.running) return;
+  // locked mouse turns freely; without the lock, dragging with the left button also works
+  if (document.pointerLockElement === canvas || (e.buttons & 1)) turn(e.movementX, e.movementY, 0.0025);
+});
+const lookPad = document.getElementById('look');
+let lookTouch = null;
+lookPad.addEventListener('touchstart', ev => { ev.preventDefault(); const t = ev.changedTouches[0]; lookTouch = { id: t.identifier, x: t.clientX, y: t.clientY }; }, { passive: false });
+lookPad.addEventListener('touchmove', ev => {
+  ev.preventDefault();
+  for (const t of ev.changedTouches) if (lookTouch && t.identifier === lookTouch.id) {
+    turn(t.clientX - lookTouch.x, t.clientY - lookTouch.y, 0.006);
+    lookTouch.x = t.clientX; lookTouch.y = t.clientY;
+  }
+}, { passive: false });
+const endLook = ev => { for (const t of ev.changedTouches) if (lookTouch && t.identifier === lookTouch.id) lookTouch = null; };
+lookPad.addEventListener('touchend', endLook); lookPad.addEventListener('touchcancel', endLook);
+function updateLook(dt) {
+  // arrow keys (and Q/E) turn left/right
+  let t = 0;
+  if (keys.has('ArrowLeft') || keys.has('KeyQ')) t += 1;
+  if (keys.has('ArrowRight') || keys.has('KeyE')) t -= 1;
+  look.yaw += t * 2.6 * dt;
+}
+
+// movement relative to where the camera faces: W forward, S back, A/D sideways
 function readInput() {
-  let x = 0, z = 0;
-  if (keys.has('KeyA') || keys.has('ArrowLeft')) x -= 1;
-  if (keys.has('KeyD') || keys.has('ArrowRight')) x += 1;
-  if (keys.has('KeyW') || keys.has('ArrowUp')) z -= 1;
-  if (keys.has('KeyS') || keys.has('ArrowDown')) z += 1;
-  x += touch.x; z += touch.z;
-  const l = Math.hypot(x, z);
-  if (l > 1) { x /= l; z /= l; }
-  return { x, z, sprint: keys.has('ShiftLeft') || keys.has('ShiftRight') || touch.sprint };
+  let sx = 0, fw = 0;
+  if (keys.has('KeyA')) sx -= 1;
+  if (keys.has('KeyD')) sx += 1;
+  if (keys.has('KeyW') || keys.has('ArrowUp')) fw += 1;
+  if (keys.has('KeyS') || keys.has('ArrowDown')) fw -= 1;
+  sx += touch.x; fw -= touch.z;
+  const l = Math.hypot(sx, fw);
+  if (l > 1) { sx /= l; fw /= l; }
+  const fx = Math.sin(look.yaw), fz = Math.cos(look.yaw), rx = -Math.cos(look.yaw), rz = Math.sin(look.yaw);
+  return { x: fx * fw + rx * sx, z: fz * fw + rz * sx, sprint: keys.has('ShiftLeft') || keys.has('ShiftRight') || touch.sprint };
+}
+// Bonk's stomp goes the way he is walking, or straight ahead when standing still
+function stompDir(i) {
+  if (i.x * i.x + i.z * i.z > 0.01) return { x: i.x, z: i.z };
+  return { x: Math.sin(look.yaw), z: Math.cos(look.yaw) };
 }
 
 // ============================================================ movement helpers
@@ -971,7 +1027,7 @@ function updateSurvivor(e, dt) {
   }
   if (dash && e.dashCD <= 0) {
     let dx = wx, dz = wz;
-    if (!moving) { dx = Math.sin(e.facing); dz = Math.cos(e.facing); }
+    if (!moving) { const a = e.isPlayer ? look.yaw : e.facing; dx = Math.sin(a); dz = Math.cos(a); }
     const l = Math.hypot(dx, dz) || 1;
     e.dashCD = CFG.dashCD; e.dashT = CFG.dashTime;
     e.vx = dx / l * CFG.dashSpeed; e.vz = dz / l * CFG.dashSpeed;
@@ -987,7 +1043,7 @@ function updateKiller(K, dt) {
   let wx = 0, wz = 0, jump = false, jx = 0, jz = 0;
   if (K.isPlayer) {
     const i = readInput(); wx = i.x; wz = i.z;
-    if (pressed.space) { jump = true; jx = wx * CFG.lunge; jz = wz * CFG.lunge; }
+    if (pressed.space) { const d = stompDir(i); jump = true; jx = d.x * CFG.lunge; jz = d.z * CFG.lunge; }
   } else {
     const o = killerBrain(K, dt); wx = o.x; wz = o.z; jump = o.jump; jx = o.jx; jz = o.jz;
   }
@@ -1104,6 +1160,8 @@ function updateBeacons(dt) {
   for (const b of state.beacons) {
     b.crystal.rotation.y += dt * (b.done ? 2.5 : 0.6);
     b.crystal.position.y = 2.75 + Math.sin(state.time * 2 + b.x) * 0.12;
+    b.halo.position.y = 1.5 + Math.sin(state.time * 1.8 + b.z) * 0.08;
+    b.halo.rotation.y += dt * 0.4;
     if (b.done) { b.beam.material.opacity = 0.25 + Math.sin(state.time * 3) * 0.06; continue; }
     if (state.gateOpen) continue;
     let n = 0;
@@ -1113,10 +1171,12 @@ function updateBeacons(dt) {
       if (Math.random() < dt * 6) burst(b.x, 2.8, b.z, 0xffe066, 1, 1.5, 0.1, 0.6, 0.6, STAR_GEO);
     }
     b.crystal.material.color.lerpColors(GREY, GOLD, b.progress);
-    if (Math.abs(b.progress - b.drawn) > 0.008) {
+    if (Math.abs(b.progress - b.drawn) > 0.008 || (b.progress >= 1 && b.drawn < 1)) {
       b.drawn = b.progress;
       b.ringFill.geometry.dispose();
-      b.ringFill.geometry = new THREE.RingGeometry(CFG.beaconR - 0.25, CFG.beaconR, 48, 1, Math.PI / 2, -b.progress * Math.PI * 2);
+      b.ringFill.geometry = b.progress > 0.005
+        ? new THREE.TorusGeometry(CFG.beaconR - 0.15, 0.12, 8, Math.max(4, Math.ceil(64 * b.progress)), b.progress * Math.PI * 2)
+        : new THREE.BufferGeometry();
     }
     if (b.progress >= 1) {
       b.done = true; state.lit++;
@@ -1234,17 +1294,38 @@ function updateCamera(dt) {
     return;
   }
   const c = state.camTarget; if (!c) return;
+  const fp = state.role === 'killer';
   state.zoom = Math.max(0, state.zoom - dt * 1.6);
-  const fov = 50 - 13 * Math.sin(Math.min(1, state.zoom) * Math.PI / 2);
+  const fov = (fp ? 75 : 62) - 13 * Math.sin(Math.min(1, state.zoom) * Math.PI / 2);
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
-  const kill = state.role === 'killer';
   const tx = c.pos.x, tz = c.pos.z;
-  const k = 1 - Math.exp(-6 * dt);
-  camera.position.x += (tx - camera.position.x) * k;
-  camera.position.y += ((kill ? 19 : 16) - camera.position.y) * k;
-  camera.position.z += (tz + (kill ? 14.5 : 12.5) - camera.position.z) * k;
-  camLook.x += (tx - camLook.x) * k; camLook.y = 1; camLook.z += (tz - camLook.z) * k;
-  camera.lookAt(camLook);
+  if (fp) {
+    // first person: eyes just in front of Bonk's face, with a little walking bob
+    const K = state.killer, sp = Math.hypot(K.vx, K.vz);
+    const bob = !K.airborne && sp > 0.5 ? Math.abs(Math.sin(K.phase)) * 0.09 : 0;
+    camera.position.set(tx + Math.sin(look.yaw) * 0.55, K.y + 1.75 + bob, tz + Math.cos(look.yaw) * 0.55);
+    camera.rotation.set(look.pitch, look.yaw + Math.PI, 0, 'YXZ');
+  } else {
+    // third person from behind; when spectating a bot, swing around behind it
+    if (c !== state.player) {
+      let d = c.facing - look.yaw; d = Math.atan2(Math.sin(d), Math.cos(d));
+      look.yaw += d * (1 - Math.exp(-3 * dt));
+    }
+    const ty = c.y + 1.2, ux = -Math.sin(look.yaw), uz = -Math.cos(look.yaw);
+    const D = 6.5, cp = Math.cos(look.pitch);
+    let H = D * cp;
+    // pull the camera in if a tree or pillar is in the way
+    for (const o of state.obstacles) {
+      if (o.h < 2.5) continue;
+      const ox = o.x - tx, oz = o.z - tz, along = ox * ux + oz * uz;
+      if (along <= 0 || along > H + o.r) continue;
+      if (Math.abs(ox * uz - oz * ux) < o.r + 0.35) H = Math.max(3, Math.min(H, along - o.r - 0.3));
+    }
+    const k = 1 - Math.exp(-14 * dt);
+    camLook.set(tx + ux * H, ty + Math.tan(look.pitch) * H, tz + uz * H);
+    camera.position.lerp(camLook, k);
+    camera.lookAt(tx, ty + 0.3, tz);
+  }
   if (state.shake > 0) {
     camera.position.x += (Math.random() - .5) * state.shake;
     camera.position.y += (Math.random() - .5) * state.shake;
@@ -1257,7 +1338,6 @@ function updateCamera(dt) {
 const $ = id => document.getElementById(id);
 const vignette = $('vignette');
 const hud = $('hud'), topEl = $('top'), squadEl = $('squad'), toastEl = $('toast'), statusEl = $('status'), barsEl = $('bars'), hintEl = $('hint');
-const mini = $('mini'), mctx = mini.getContext('2d');
 let toastTimer = 0;
 function toast(msg, dur = 2.4) {
   toastEl.textContent = msg; toastEl.style.opacity = 1;
@@ -1279,8 +1359,8 @@ function setupHUD() {
   barsEl.innerHTML = bars.map(([l, c]) => `<div class="bar">${l}<div class="track"><div class="fill" style="background:${c}"></div></div></div>`).join('');
   barFills = [...barsEl.querySelectorAll('.fill')];
   hintEl.innerHTML = state.role === 'killer'
-    ? 'Land on survivors to squish 🥞<br>Stomp bushes to flush out hiders 🌿<br>Land on mushrooms to flatten them 🍄'
-    : 'Stand in a lamp ring to light it ✨<br>Stand by a pancake to fluff it up 💖<br>Hide in bushes 🌿 · bounce off mushrooms 🍄';
+    ? 'Click the game to look with the mouse · ←/→ also turn<br>Land on survivors to squish 🥞<br>Stomp bushes to flush out hiders 🌿 · flatten mushrooms 🍄'
+    : 'Click the game to look with the mouse · ←/→ also turn<br>Stand in a lamp ring to light it ✨ · by a pancake to fluff it up 💖<br>Hide in bushes 🌿 · bounce off mushrooms 🍄';
 }
 const STATE_ICON = { alive: '🙂', down: '🥞', ghost: '👻', escaped: '🏃' };
 function updateHUD() {
@@ -1315,38 +1395,6 @@ function updateHUD() {
     statusEl.textContent = msg;
   }
 }
-// survivors only: Bonk gets no map, so he has to find survivors by looking
-function drawMini() {
-  if (state.role === 'killer') return;
-  const W = mini.width, s = W / 2 / (ARENA_R + 2), c = mctx, P = state.player;
-  c.clearRect(0, 0, W, W);
-  c.save(); c.translate(W / 2, W / 2);
-  c.fillStyle = '#c4ecaf'; c.beginPath(); c.arc(0, 0, ARENA_R * s, 0, 6.29); c.fill();
-  c.fillStyle = 'rgba(70,140,80,.35)';
-  for (const o of state.obstacles) { c.beginPath(); c.arc(o.x * s, o.z * s, Math.max(3, o.r * s), 0, 6.29); c.fill(); }
-  c.fillStyle = 'rgba(60,150,80,.55)';
-  for (const b of state.bushes) { c.beginPath(); c.arc(b.x * s, b.z * s, b.r * s, 0, 6.29); c.fill(); }
-  for (const b of state.bouncers) { c.fillStyle = b.flat > 0 ? '#e6c3cb' : '#ff7a8a'; c.beginPath(); c.arc(b.x * s, b.z * s, 5, 0, 6.29); c.fill(); }
-  for (const b of state.beacons) {
-    c.fillStyle = b.done ? '#ffcf4a' : '#d8d0ec'; c.beginPath(); c.arc(b.x * s, b.z * s, 10, 0, 6.29); c.fill();
-    if (!b.done && b.progress > 0) { c.strokeStyle = '#ffb800'; c.lineWidth = 5; c.beginPath(); c.arc(b.x * s, b.z * s, 13, -Math.PI / 2, -Math.PI / 2 + b.progress * 6.283); c.stroke(); }
-  }
-  const g = state.gate;
-  c.fillStyle = state.gateOpen ? '#4fd28a' : '#b79ad6'; c.fillRect(g.x * s - 10, g.z * s - 10, 20, 20);
-  for (const e of state.survivors) {
-    if (e.state === 'ghost' || e.state === 'escaped') continue;
-    c.fillStyle = hex(e.color); c.strokeStyle = e.isPlayer ? '#fff' : 'rgba(0,0,0,.35)'; c.lineWidth = e.isPlayer ? 5 : 2;
-    c.beginPath();
-    if (e.state === 'down') c.ellipse(e.pos.x * s, e.pos.z * s, 11, 5, 0, 0, 6.29); else c.arc(e.pos.x * s, e.pos.z * s, 8, 0, 6.29);
-    c.fill(); c.stroke();
-  }
-  const K = state.killer;
-  if (dist(K.pos, state.camTarget.pos) < 26) {
-    c.fillStyle = '#7a5cff'; c.strokeStyle = 'rgba(0,0,0,.4)'; c.lineWidth = 2;
-    c.beginPath(); c.arc(K.pos.x * s, K.pos.z * s, 12, 0, 6.29); c.fill(); c.stroke();
-  }
-  c.restore();
-}
 
 // ============================================================ game flow
 function startGame(role) {
@@ -1378,16 +1426,18 @@ function startGame(role) {
   }
   state.player = role === 'killer' ? state.killer : state.survivors[0];
   state.player.isPlayer = true;
-  state.player.model.root.add(marker);
   marker.position.set(0, role === 'killer' ? 3.0 : 2.0, 0);
   state.camTarget = state.player;
-  camera.position.set(state.player.pos.x, 30, state.player.pos.z + 25);
-  camLook.copy(state.player.pos);
+  look.yaw = role === 'killer' ? Math.random() * Math.PI * 2 : state.player.facing;
+  look.pitch = (PITCH[role] || PITCH.survivor)[2];
+  camera.position.set(state.player.pos.x - Math.sin(look.yaw) * 6, 4, state.player.pos.z - Math.cos(look.yaw) * 6);
+  $('cross').style.display = role === 'killer' ? 'block' : 'none';
+  // the menu click counts as a user gesture, so mouse look can start right away
+  if (!isTouch) { try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (e) { } }
   $('menu').classList.add('hidden'); $('result').classList.add('hidden');
   hud.classList.remove('hidden');
   $('touch').style.display = isTouch ? 'block' : 'none';
   $('tRun').style.display = role === 'killer' ? 'none' : 'flex';
-  mini.style.display = role === 'killer' ? 'none' : '';
   $('tAct').textContent = role === 'killer' ? 'BONK' : 'DASH';
   setupHUD();
   toast(role === 'killer' ? 'Squish all 4 friends! 👾' : 'Light 3 star lamps, then escape! ✨', 3);
@@ -1397,8 +1447,10 @@ function startGame(role) {
 function endGame() {
   state.running = false; state.over = true;
   landRing.visible = aimRing.visible = false;
+  if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
   const esc = state.survivors.filter(s => s.state === 'escaped').length;
-  const gh = state.survivors.filter(s => s.state === 'ghost').length;
+  // pancakes left at the end can never be fluffed up again, so they count as caught
+  const caught = state.survivors.filter(s => s.state === 'ghost' || s.state === 'down').length;
   const survWin = esc >= 2;
   let title, body;
   if (state.role === 'killer') {
@@ -1406,10 +1458,12 @@ function endGame() {
     body = survWin ? 'Bonk is very grumpy now.' : 'Bonk wins! What a flat little party.';
   } else {
     title = survWin ? 'Friends win! 🎉' : 'Bonk wins! 🥞';
-    body = state.player.state === 'escaped' ? 'You made it through the gate!' : 'You turned into a ghost… boo.';
+    body = state.player.state === 'escaped' ? 'You made it through the gate!'
+      : state.player.state === 'down' ? 'You were left as a pancake with nobody to fluff you up.'
+      : 'You turned into a ghost… boo.';
   }
   $('resultTitle').textContent = title;
-  $('resultBody').innerHTML = `${body}<br><b>${esc}</b> escaped · <b>${gh}</b> ghosted<br><small>(survivors win if at least 2 escape)</small>`;
+  $('resultBody').innerHTML = `${body}<br><b>${esc}</b> escaped · <b>${caught}</b> caught<br><small>(survivors win if at least 2 escape)</small>`;
   setTimeout(() => { $('result').classList.remove('hidden'); $('touch').style.display = 'none'; }, 1200);
 }
 
@@ -1427,6 +1481,7 @@ function update(dt) {
   for (const e of state.ents) animate(e, dt);
   if (state.role === 'killer') {
     for (const s of state.survivors) if (s.hidden && dist(s.pos, state.killer.pos) > 3) s.model.root.visible = false;
+    state.killer.model.root.visible = false; // first person: don't draw our own body
   }
   pressed.space = false;
 
@@ -1438,8 +1493,8 @@ function update(dt) {
   }
   aimRing.visible = K.isPlayer && !K.airborne && K.jumpCD <= 0;
   if (aimRing.visible) {
-    const i = readInput();
-    aimRing.position.set(K.pos.x + i.x * CFG.lunge * AIRTIME, 0.07, K.pos.z + i.z * CFG.lunge * AIRTIME);
+    const d = stompDir(readInput());
+    aimRing.position.set(K.pos.x + d.x * CFG.lunge * AIRTIME, 0.07, K.pos.z + d.z * CFG.lunge * AIRTIME);
     aimRing.scale.setScalar(CFG.squishR);
   }
   marker.position.y = (state.role === 'killer' ? 3.0 : 2.0) + Math.sin(state.time * 4) * 0.15;
@@ -1456,7 +1511,8 @@ function update(dt) {
       state.camTarget = state.survivors.find(s => s.state === 'alive') || state.survivors.find(s => s.state === 'down') || state.killer;
     }
   }
-  if (!state.survivors.some(s => s.state === 'alive' || s.state === 'down')) endGame();
+  // game over as soon as nobody is left standing (everyone is a pancake, a ghost, or escaped)
+  if (!state.survivors.some(s => s.state === 'alive')) endGame();
 }
 
 // ============================================================ boot
@@ -1486,11 +1542,12 @@ function frame(now) {
     else if (state.slow > 0) { state.slow -= dt; sim = dt * 0.35; }
     update(sim);
   } else if (state.over) { state.time += dt; for (const e of state.ents) animate(e, dt); }
+  if (state.running) updateLook(dt);
   updateAudio(dt);
   updateParticles(sim);
   updateCamera(dt);
   hudT += dt;
-  if (state.running && hudT > 0.066) { hudT = 0; updateHUD(); drawMini(); }
+  if (state.running && hudT > 0.066) { hudT = 0; updateHUD(); }
   if (MOBILE && frameNo++ % 2 === 0) renderer.shadowMap.needsUpdate = true;
   renderer.render(scene, camera);
 }

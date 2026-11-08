@@ -116,7 +116,7 @@
       </button>
       <button class="role killer" data-role="killer">
         <span class="em">👾</span><b>Bonk</b>
-        <small>Leap on survivors to squish them into pancakes. Stomp a pancake again to make it a ghost!</small>
+        <small>Leap on survivors to squish them into pancakes. Guard the pancakes so nobody fluffs them back up!</small>
       </button>
     </div>
     <div class="controls">
@@ -843,7 +843,7 @@ function killerBrain(K, dt) {
   ai.hesitate -= dt; ai.retarget -= dt;
   if (stuckCheck(K, dt)) { out.x = ai.ux; out.z = ai.uz; ai.wanted = true; return out; }
 
-  const valid = t => t && (t.state === 'alive' || t.state === 'down');
+  const valid = t => t && t.state === 'alive';
   if (ai.retarget <= 0 || !valid(ai.target)) {
     ai.retarget = 0.5;
     let best = null, bs = 1e9;
@@ -853,7 +853,7 @@ function killerBrain(K, dt) {
       if (s.hidden && d > 3) continue;
       const sees = d < 20 || s.charging || (s.sprinting && d < 30) || (s === ai.target && d < 26);
       if (!sees) continue;
-      let sc = d; if (s.state === 'down') sc += 40; if (s.protect > 0) sc += 30;
+      let sc = d; if (s.protect > 0) sc += 30;
       if (sc < bs) { bs = sc; best = s; }
     }
     ai.target = best;
@@ -890,7 +890,12 @@ function killerBrain(K, dt) {
     if (!ai.wander || ai.wanderT <= 0 || dist(K.pos, ai.wander) < 3) {
       ai.wanderT = 7;
       const open = state.beacons.filter(b => !b.done);
-      if (state.gateOpen && Math.random() < 0.5) ai.wander = { x: state.gate.x * 0.85, z: state.gate.z * 0.85 };
+      const pancakes = state.survivors.filter(s => s.state === 'down');
+      if (pancakes.length && Math.random() < 0.6) {
+        // guard a pancake from a few steps away, so rescuers walk into view
+        const p = pancakes[Math.floor(Math.random() * pancakes.length)], a = Math.random() * 6.28;
+        ai.wander = { x: p.pos.x + Math.cos(a) * 4, z: p.pos.z + Math.sin(a) * 4 };
+      } else if (state.gateOpen && Math.random() < 0.5) ai.wander = { x: state.gate.x * 0.85, z: state.gate.z * 0.85 };
       else if (open.length && Math.random() < 0.7) ai.wander = open[Math.floor(Math.random() * open.length)];
       else { const a = Math.random() * 6.28, r = Math.random() * 28; ai.wander = { x: Math.cos(a) * r, z: Math.sin(a) * r }; }
     }
@@ -967,7 +972,7 @@ function updateKiller(K, dt) {
     K.vy -= GRAV * dt; K.y += K.vy * dt;
     if (K.vy < 0 && K.y < 1.5) {
       for (const s of state.survivors) {
-        if ((s.state === 'alive' || s.state === 'down') && s.protect <= 0 && dist(K.pos, s.pos) < CFG.squishR && Math.abs(K.y - s.y) < 1.4) squish(s);
+        if (s.state === 'alive' && s.protect <= 0 && dist(K.pos, s.pos) < CFG.squishR && Math.abs(K.y - s.y) < 1.4) squish(s);
       }
     }
     if (K.y <= 0) {
@@ -992,15 +997,12 @@ function updateKiller(K, dt) {
   }
 }
 
+// only standing survivors can be squished; pancakes become ghosts only by bleeding out
 function squish(s) {
-  const wasAlive = s.state === 'alive';
+  if (s.state !== 'alive') return;
   s.airborne = false; s.y = 0;
-  if (s.state === 'alive') {
-    s.state = 'down'; s.bleed = CFG.bleedTime; s.revive = 0; s.vx = s.vz = 0; s.protect = CFG.pancakeSafe;
-    toast(s.isPlayer ? 'You got squished! 🥞' : `${s.name} got squished! 🥞`);
-  } else if (s.state === 'down') {
-    makeGhost(s);
-  }
+  s.state = 'down'; s.bleed = CFG.bleedTime; s.revive = 0; s.vx = s.vz = 0; s.protect = CFG.pancakeSafe;
+  toast(s.isPlayer ? 'You got squished! 🥞' : `${s.name} got squished! 🥞`);
   sfx.squish(near(s.pos));
   burst(s.pos.x, 0.4, s.pos.z, [s.color, 0xffffff, 0xffe066], 22, 7, 0.22, 0.8, 0.8, STAR_GEO);
   wave(s.pos.x, s.pos.z, s.color, 4);
@@ -1009,7 +1011,7 @@ function squish(s) {
   if (state.killer.isPlayer || s.isPlayer || (c && dist(c.pos, s.pos) < 16)) {
     state.freeze = 0.13; state.slow = 0.3;
     if (!reduceMotion) state.zoom = 1;
-    popText(s.pos, wasAlive ? 'SQUISH!' : 'POOF!', !wasAlive);
+    popText(s.pos, 'SQUISH!', false);
   }
 }
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1281,7 +1283,9 @@ function updateHUD() {
     statusEl.textContent = msg;
   }
 }
+// survivors only: Bonk gets no map, so he has to find survivors by looking
 function drawMini() {
+  if (state.role === 'killer') return;
   const W = mini.width, s = W / 2 / (ARENA_R + 2), c = mctx, P = state.player;
   c.clearRect(0, 0, W, W);
   c.save(); c.translate(W / 2, W / 2);
@@ -1297,19 +1301,16 @@ function drawMini() {
   }
   const g = state.gate;
   c.fillStyle = state.gateOpen ? '#4fd28a' : '#b79ad6'; c.fillRect(g.x * s - 10, g.z * s - 10, 20, 20);
-  const killerView = state.role === 'killer';
   for (const e of state.survivors) {
     if (e.state === 'ghost' || e.state === 'escaped') continue;
-    if (killerView && e.hidden && dist(e.pos, P.pos) > 3) continue;
-    if (killerView && !(e.charging || e.state === 'down' || dist(e.pos, P.pos) < 22)) continue;
     c.fillStyle = hex(e.color); c.strokeStyle = e.isPlayer ? '#fff' : 'rgba(0,0,0,.35)'; c.lineWidth = e.isPlayer ? 5 : 2;
     c.beginPath();
     if (e.state === 'down') c.ellipse(e.pos.x * s, e.pos.z * s, 11, 5, 0, 0, 6.29); else c.arc(e.pos.x * s, e.pos.z * s, 8, 0, 6.29);
     c.fill(); c.stroke();
   }
   const K = state.killer;
-  if (killerView || dist(K.pos, state.camTarget.pos) < 26) {
-    c.fillStyle = '#7a5cff'; c.strokeStyle = K.isPlayer ? '#fff' : 'rgba(0,0,0,.4)'; c.lineWidth = K.isPlayer ? 5 : 2;
+  if (dist(K.pos, state.camTarget.pos) < 26) {
+    c.fillStyle = '#7a5cff'; c.strokeStyle = 'rgba(0,0,0,.4)'; c.lineWidth = 2;
     c.beginPath(); c.arc(K.pos.x * s, K.pos.z * s, 12, 0, 6.29); c.fill(); c.stroke();
   }
   c.restore();
@@ -1354,6 +1355,7 @@ function startGame(role) {
   hud.classList.remove('hidden');
   $('touch').style.display = isTouch ? 'block' : 'none';
   $('tRun').style.display = role === 'killer' ? 'none' : 'flex';
+  mini.style.display = role === 'killer' ? 'none' : '';
   $('tAct').textContent = role === 'killer' ? 'BONK' : 'DASH';
   setupHUD();
   toast(role === 'killer' ? 'Squish all 4 friends! 👾' : 'Light 3 star lamps, then escape! ✨', 3);
